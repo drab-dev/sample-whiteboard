@@ -19,7 +19,10 @@ export class Database {
       .select()
       .single();
 
-    if (error) throw error;
+    if (error) {
+      console.error('Database error creating user:', error);
+      throw new Error(error.message || 'Failed to create user');
+    }
     return data;
   }
 
@@ -53,7 +56,10 @@ export class Database {
       .select()
       .single();
 
-    if (error) throw error;
+    if (error) {
+      console.error('Database error creating organization:', error);
+      throw new Error(error.message || 'Failed to create organization');
+    }
     return data;
   }
 
@@ -86,8 +92,16 @@ export class Database {
   }
 
   static async getWhiteboardsForUser(userId: string) {
-    // Get whiteboards user owns or has permission to
-    const { data, error } = await supabase
+    // Get whiteboards user owns
+    const { data: ownedWhiteboards, error: ownedError } = await supabase
+      .from('whiteboards')
+      .select('*')
+      .eq('owner_id', userId);
+
+    if (ownedError) throw ownedError;
+
+    // Get whiteboards user has permission to
+    const { data: permissionWhiteboards, error: permissionError } = await supabase
       .from('whiteboards')
       .select(`
         *,
@@ -96,10 +110,24 @@ export class Database {
           user_id
         )
       `)
-      .or(`owner_id.eq.${userId},whiteboard_permissions.user_id.eq.${userId}`);
+      .eq('whiteboard_permissions.user_id', userId);
 
-    if (error) throw error;
-    return data;
+    if (permissionError) throw permissionError;
+
+    // Combine and deduplicate
+    const allWhiteboards = [...(ownedWhiteboards || [])];
+    const ownedIds = new Set(ownedWhiteboards?.map(wb => wb.id) || []);
+    
+    // Add permission whiteboards that aren't already owned
+    if (permissionWhiteboards) {
+      permissionWhiteboards.forEach(wb => {
+        if (!ownedIds.has(wb.id)) {
+          allWhiteboards.push(wb);
+        }
+      });
+    }
+
+    return allWhiteboards;
   }
 
   static async getWhiteboard(id: string) {

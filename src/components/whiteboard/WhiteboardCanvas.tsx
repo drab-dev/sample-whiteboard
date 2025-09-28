@@ -17,12 +17,29 @@ export const WhiteboardCanvas: React.FC<WhiteboardCanvasProps> = ({
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const [whiteboard, setWhiteboard] = useState<Whiteboard | null>(null);
   const [loading, setLoading] = useState(true);
-  const [selectedTool, setSelectedTool] = useState<'select' | 'text' | 'rect' | 'circle' | 'arrow'>('select');
+  const [selectedTool, setSelectedTool] = useState<'select' | 'text' | 'rect' | 'circle' | 'arrow' | 'pen'>('select');
   const [isDrawing, setIsDrawing] = useState(false);
   const [draggedObject, setDraggedObject] = useState<string | null>(null);
   const [lastMousePos, setLastMousePos] = useState({ x: 0, y: 0 });
   const [objects, setObjects] = useState<CanvasObject[]>([]);
   const [activeUsers, setActiveUsers] = useState<ActiveUser[]>([]);
+  const [selectedObject, setSelectedObject] = useState<string | null>(null);
+  const [editingText, setEditingText] = useState<string | null>(null);
+  const [textInput, setTextInput] = useState('');
+  const [penPath, setPenPath] = useState<{x: number, y: number}[]>([]);
+  
+  // Style states
+  const [selectedColor, setSelectedColor] = useState('#000000');
+  const [selectedFillColor, setSelectedFillColor] = useState('#3B82F6');
+  const [opacity, setOpacity] = useState(1);
+  const [strokeWidth, setStrokeWidth] = useState(2);
+  const [fontSize, setFontSize] = useState(16);
+  const [fontFamily, setFontFamily] = useState('Arial');
+  const [textStyle, setTextStyle] = useState({
+    bold: false,
+    italic: false,
+    underline: false
+  });
 
   const { sendMessage, isConnected } = useWebSocket(whiteboardId, {
     onWhiteboardUpdate: (updatedWhiteboard: Whiteboard) => {
@@ -124,37 +141,82 @@ export const WhiteboardCanvas: React.FC<WhiteboardCanvasProps> = ({
     ctx.save();
     
     const style = obj.style || {};
-    ctx.fillStyle = style.backgroundColor || '#3B82F6';
-    ctx.strokeStyle = style.color || '#1E40AF';
-    ctx.lineWidth = style.strokeWidth || 2;
+    ctx.globalAlpha = style.opacity || 1;
+    ctx.fillStyle = style.backgroundColor || selectedFillColor;
+    ctx.strokeStyle = style.color || selectedColor;
+    ctx.lineWidth = style.strokeWidth || strokeWidth;
 
     switch (obj.type) {
       case 'text':
-        ctx.fillStyle = style.color || '#000';
-        ctx.font = `${style.fontSize || 16}px Arial`;
-        ctx.fillText(obj.content || '', obj.x, obj.y);
+        ctx.fillStyle = style.color || selectedColor;
+        const fontWeight = style.bold ? 'bold' : 'normal';
+        const fontStyle = style.italic ? 'italic' : 'normal';
+        const fontSize = style.fontSize || 16;
+        const fontFamily = style.fontFamily || 'Arial';
+        ctx.font = `${fontStyle} ${fontWeight} ${fontSize}px ${fontFamily}`;
+        
+        const lines = (obj.content || '').split('\n');
+        lines.forEach((line, index) => {
+          ctx.fillText(line, obj.x, obj.y + (index * fontSize * 1.2));
+        });
+        
+        if (style.underline) {
+          const textWidth = ctx.measureText(obj.content || '').width;
+          ctx.beginPath();
+          ctx.moveTo(obj.x, obj.y + 2);
+          ctx.lineTo(obj.x + textWidth, obj.y + 2);
+          ctx.stroke();
+        }
         break;
 
       case 'shape':
         if (obj.content === 'rectangle') {
-          ctx.fillRect(obj.x, obj.y, obj.width || 100, obj.height || 60);
+          if (style.backgroundColor) {
+            ctx.fillRect(obj.x, obj.y, obj.width || 100, obj.height || 60);
+          }
           ctx.strokeRect(obj.x, obj.y, obj.width || 100, obj.height || 60);
         } else if (obj.content === 'circle') {
           const radius = Math.min(obj.width || 60, obj.height || 60) / 2;
           ctx.beginPath();
           ctx.arc(obj.x + radius, obj.y + radius, radius, 0, 2 * Math.PI);
-          ctx.fill();
+          if (style.backgroundColor) {
+            ctx.fill();
+          }
           ctx.stroke();
         }
         break;
 
       case 'line':
         ctx.beginPath();
-        ctx.moveTo(obj.x, obj.y);
-        if (obj.points && obj.points.length > 0) {
-          obj.points.forEach(point => {
-            ctx.lineTo(point.x, point.y);
-          });
+        if (obj.content === 'arrow') {
+          // Draw arrow
+          const endX = obj.x + (obj.width || 100);
+          const endY = obj.y + (obj.height || 0);
+          
+          // Main line
+          ctx.moveTo(obj.x, obj.y);
+          ctx.lineTo(endX, endY);
+          
+          // Arrow head
+          const angle = Math.atan2(endY - obj.y, endX - obj.x);
+          const headLength = 15;
+          ctx.lineTo(
+            endX - headLength * Math.cos(angle - Math.PI / 6),
+            endY - headLength * Math.sin(angle - Math.PI / 6)
+          );
+          ctx.moveTo(endX, endY);
+          ctx.lineTo(
+            endX - headLength * Math.cos(angle + Math.PI / 6),
+            endY - headLength * Math.sin(angle + Math.PI / 6)
+          );
+        } else {
+          // Free drawing
+          ctx.moveTo(obj.x, obj.y);
+          if (obj.points && obj.points.length > 0) {
+            obj.points.forEach(point => {
+              ctx.lineTo(point.x, point.y);
+            });
+          }
         }
         ctx.stroke();
         break;
@@ -198,9 +260,25 @@ export const WhiteboardCanvas: React.FC<WhiteboardCanvasProps> = ({
       const clickedObject = findObjectAt(x, y);
       if (clickedObject) {
         setDraggedObject(clickedObject.id);
+        setSelectedObject(clickedObject.id);
+      } else {
+        setSelectedObject(null);
       }
-    } else if (selectedTool !== 'select') {
-      // Create new object
+    } else if (selectedTool === 'pen') {
+      // Start free drawing
+      setIsDrawing(true);
+      setPenPath([{ x, y }]);
+    } else if (selectedTool === 'text') {
+      // Create text or start editing
+      const clickedObject = findObjectAt(x, y);
+      if (clickedObject && clickedObject.type === 'text') {
+        setEditingText(clickedObject.id);
+        setTextInput(clickedObject.content || '');
+      } else {
+        createObject(x, y, 'text');
+      }
+    } else {
+      // Create new shape/arrow
       setIsDrawing(true);
       createObject(x, y);
     }
@@ -219,7 +297,9 @@ export const WhiteboardCanvas: React.FC<WhiteboardCanvasProps> = ({
       data: { x, y }
     });
 
-    if (draggedObject) {
+    if (selectedTool === 'pen' && isDrawing) {
+      setPenPath(prev => [...prev, { x, y }]);
+    } else if (draggedObject) {
       const dx = x - lastMousePos.x;
       const dy = y - lastMousePos.y;
       moveObject(draggedObject, dx, dy);
@@ -228,6 +308,30 @@ export const WhiteboardCanvas: React.FC<WhiteboardCanvasProps> = ({
   };
 
   const handleMouseUp = () => {
+    if (selectedTool === 'pen' && isDrawing && penPath.length > 1) {
+      // Create pen stroke object
+      const newObject: CanvasObject = {
+        id: `obj_${Date.now()}_${Math.random()}`,
+        type: 'line',
+        x: penPath[0].x,
+        y: penPath[0].y,
+        points: penPath.slice(1),
+        style: {
+          color: selectedColor,
+          strokeWidth: strokeWidth,
+          opacity: opacity
+        }
+      };
+
+      sendMessage({
+        type: 'object_create',
+        whiteboardId,
+        data: { object: newObject }
+      });
+      
+      setPenPath([]);
+    }
+    
     setIsDrawing(false);
     setDraggedObject(null);
   };
@@ -258,19 +362,28 @@ export const WhiteboardCanvas: React.FC<WhiteboardCanvasProps> = ({
   const createObject = (x: number, y: number) => {
     const newObject: CanvasObject = {
       id: `obj_${Date.now()}_${Math.random()}`,
-      type: selectedTool === 'text' ? 'text' : 'shape',
+      type: selectedTool === 'text' ? 'text' : selectedTool === 'arrow' ? 'line' : 'shape',
       x,
       y,
       content: selectedTool === 'text' ? 'New Text' : 
-               selectedTool === 'rect' ? 'rectangle' : 'circle',
-      width: selectedTool === 'text' ? undefined : 100,
+               selectedTool === 'rect' ? 'rectangle' : 
+               selectedTool === 'circle' ? 'circle' :
+               selectedTool === 'arrow' ? 'arrow' : '',
+      width: selectedTool === 'text' ? undefined : 
+             selectedTool === 'arrow' ? 100 : 100,
       height: selectedTool === 'text' ? undefined : 
-              selectedTool === 'circle' ? 100 : 60,
+              selectedTool === 'circle' ? 100 : 
+              selectedTool === 'arrow' ? 0 : 60,
       style: {
-        backgroundColor: selectedTool === 'rect' ? '#3B82F6' : 
-                       selectedTool === 'circle' ? '#10B981' : undefined,
-        color: selectedTool === 'text' ? '#000' : '#fff',
-        fontSize: selectedTool === 'text' ? 16 : undefined
+        backgroundColor: selectedTool === 'text' ? undefined : selectedFillColor,
+        color: selectedTool === 'text' ? selectedColor : selectedColor,
+        fontSize: selectedTool === 'text' ? fontSize : undefined,
+        fontFamily: selectedTool === 'text' ? fontFamily : undefined,
+        bold: selectedTool === 'text' ? textStyle.bold : undefined,
+        italic: selectedTool === 'text' ? textStyle.italic : undefined,
+        underline: selectedTool === 'text' ? textStyle.underline : undefined,
+        strokeWidth: strokeWidth,
+        opacity: opacity
       }
     };
 
@@ -355,6 +468,20 @@ export const WhiteboardCanvas: React.FC<WhiteboardCanvasProps> = ({
       <WhiteboardToolbar 
         selectedTool={selectedTool}
         onToolChange={setSelectedTool}
+        selectedColor={selectedColor}
+        onColorChange={setSelectedColor}
+        selectedFillColor={selectedFillColor}
+        onFillColorChange={setSelectedFillColor}
+        opacity={opacity}
+        onOpacityChange={setOpacity}
+        strokeWidth={strokeWidth}
+        onStrokeWidthChange={setStrokeWidth}
+        fontSize={fontSize}
+        onFontSizeChange={setFontSize}
+        fontFamily={fontFamily}
+        onFontFamilyChange={setFontFamily}
+        textStyle={textStyle}
+        onTextStyleChange={(newStyle) => setTextStyle(prev => ({ ...prev, ...newStyle }))}
       />
 
       {/* Canvas */}
@@ -367,6 +494,50 @@ export const WhiteboardCanvas: React.FC<WhiteboardCanvasProps> = ({
           onMouseUp={handleMouseUp}
           onMouseLeave={handleMouseUp}
         />
+        
+        {/* Text input overlay */}
+        {editingText && (
+          <div className="absolute inset-0 pointer-events-none">
+            <textarea
+              value={textInput}
+              onChange={(e) => setTextInput(e.target.value)}
+              onBlur={() => {
+                if (editingText && textInput.trim()) {
+                  // Update the text object
+                  const updatedObject = objects.find(obj => obj.id === editingText);
+                  if (updatedObject) {
+                    const newObject = { ...updatedObject, content: textInput };
+                    sendMessage({
+                      type: 'object_update',
+                      whiteboardId,
+                      data: { object: newObject }
+                    });
+                  }
+                }
+                setEditingText(null);
+                setTextInput('');
+              }}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter' && !e.shiftKey) {
+                  e.preventDefault();
+                  e.currentTarget.blur();
+                }
+              }}
+              className="pointer-events-auto absolute bg-transparent border-2 border-blue-500 rounded p-1 resize-none"
+              style={{
+                left: objects.find(obj => obj.id === editingText)?.x || 0,
+                top: (objects.find(obj => obj.id === editingText)?.y || 0) - 20,
+                fontSize: fontSize,
+                fontFamily: fontFamily,
+                fontWeight: textStyle.bold ? 'bold' : 'normal',
+                fontStyle: textStyle.italic ? 'italic' : 'normal',
+                textDecoration: textStyle.underline ? 'underline' : 'none',
+                color: selectedColor
+              }}
+              autoFocus
+            />
+          </div>
+        )}
       </div>
     </div>
   );

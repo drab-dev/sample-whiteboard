@@ -46,6 +46,12 @@ router.post('/register', async (req: Request, res: Response) => {
     });
   } catch (error) {
     console.error('Registration error:', error);
+    
+    // If it's a Supabase error, return the specific error message
+    if (error && typeof error === 'object' && 'message' in error) {
+      return res.status(500).json({ error: error.message });
+    }
+    
     res.status(500).json({ error: 'Registration failed' });
   }
 });

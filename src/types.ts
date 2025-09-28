@@ -33,7 +33,12 @@ export interface CanvasObject {
     color?: string;
     backgroundColor?: string;
     fontSize?: number;
+    fontFamily?: string;
     strokeWidth?: number;
+    opacity?: number;
+    bold?: boolean;
+    italic?: boolean;
+    underline?: boolean;
   };
   points?: { x: number; y: number }[];
 }
