@@ -224,4 +224,57 @@ export class Database {
     if (error) throw error;
     return data;
   }
+
+  // Share link operations
+  static async createShareLink(whiteboardId: string, permission: string) {
+    const { data, error } = await supabase
+      .from('whiteboard_share_links')
+      .insert({
+        whiteboard_id: whiteboardId,
+        permission
+      })
+      .select()
+      .single();
+
+    if (error) throw error;
+    return data;
+  }
+
+  static async getWhiteboardShareLinks(whiteboardId: string) {
+    const { data, error } = await supabase
+      .from('whiteboard_share_links')
+      .select('*')
+      .eq('whiteboard_id', whiteboardId)
+      .order('created_at', { ascending: false });
+
+    if (error) throw error;
+    return data;
+  }
+
+  static async deleteShareLink(linkId: string) {
+    const { error } = await supabase
+      .from('whiteboard_share_links')
+      .delete()
+      .eq('id', linkId);
+
+    if (error) throw error;
+  }
+
+  static async getShareLink(linkId: string) {
+    const { data, error } = await supabase
+      .from('whiteboard_share_links')
+      .select(`
+        *,
+        whiteboards (
+          id,
+          title,
+          organization_id
+        )
+      `)
+      .eq('id', linkId)
+      .single();
+
+    if (error) throw error;
+    return data;
+  }
 }

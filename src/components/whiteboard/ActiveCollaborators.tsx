@@ -8,7 +8,12 @@ interface ActiveCollaboratorsProps {
 
 export const ActiveCollaborators: React.FC<ActiveCollaboratorsProps> = ({ users }) => {
   if (users.length === 0) {
-    return null;
+    return (
+      <div className="flex items-center text-sm text-gray-500">
+        <Users size={16} className="mr-1" />
+        <span>No one online</span>
+      </div>
+    );
   }
 
   return (
@@ -22,7 +27,7 @@ export const ActiveCollaborators: React.FC<ActiveCollaboratorsProps> = ({ users 
         {users.slice(0, 5).map((user) => (
           <div
             key={user.id}
-            className="w-8 h-8 rounded-full flex items-center justify-center text-white text-sm font-medium border-2 border-white shadow-sm"
+            className="w-8 h-8 rounded-full flex items-center justify-center text-white text-sm font-medium border-2 border-white shadow-sm hover:scale-110 transition-transform cursor-pointer"
             style={{ backgroundColor: user.color }}
             title={user.name}
           >

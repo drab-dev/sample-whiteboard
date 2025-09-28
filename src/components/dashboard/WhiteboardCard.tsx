@@ -136,11 +136,11 @@ export const WhiteboardCard: React.FC<WhiteboardCardProps> = ({
               <span>
                 {whiteboard.collaborators.length} collaborator{whiteboard.collaborators.length > 1 ? 's' : ''}
               </span>
-              <div className="ml-2 flex -space-x-1">
+              <div className="ml-3 flex -space-x-2">
                 {whiteboard.collaborators.slice(0, 3).map((collaborator, index) => (
                   <div
                     key={index}
-                    className="w-6 h-6 bg-gradient-to-br from-blue-400 to-blue-600 rounded-full flex items-center justify-center text-white text-xs font-medium border-2 border-white"
+                    className="w-7 h-7 bg-gradient-to-br from-blue-400 to-blue-600 rounded-full flex items-center justify-center text-white text-xs font-medium border-2 border-white shadow-sm hover:scale-110 transition-transform"
                     title={`${collaborator.name} (${collaborator.permission})`}
                   >
                     {collaborator.name.charAt(0).toUpperCase()}

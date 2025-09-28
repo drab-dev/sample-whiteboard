@@ -23,12 +23,14 @@ export interface WhiteboardContent {
 
 export interface CanvasObject {
   id: string;
-  type: 'text' | 'shape' | 'arrow' | 'line';
+  type: 'text' | 'shape' | 'arrow' | 'line' | 'mermaid';
   x: number;
   y: number;
   width?: number;
   height?: number;
   content?: string;
+  layer?: number;
+  selected?: boolean;
   style?: {
     color?: string;
     backgroundColor?: string;
@@ -41,6 +43,7 @@ export interface CanvasObject {
     underline?: boolean;
   };
   points?: { x: number; y: number }[];
+  mermaidCode?: string;
 }
 
 export interface Collaborator {
@@ -54,4 +57,13 @@ export interface ActiveUser {
   name: string;
   cursor: { x: number; y: number };
   color: string;
+  isActive?: boolean;
+}
+
+export interface ShareLink {
+  id: string;
+  whiteboardId: string;
+  permission: 'viewer' | 'commenter' | 'editor';
+  expiresAt?: string;
+  createdAt: string;
 }

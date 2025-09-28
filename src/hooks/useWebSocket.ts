@@ -7,6 +7,7 @@ interface WebSocketHooks {
   onObjectUpdate?: (object: CanvasObject) => void;
   onObjectCreate?: (object: CanvasObject) => void;
   onObjectDelete?: (objectId: string) => void;
+  onCursorUpdate?: (userId: string, cursor: { x: number; y: number }) => void;
 }
 
 interface WebSocketMessage {
@@ -95,8 +96,15 @@ export const useWebSocket = (whiteboardId: string, hooks: WebSocketHooks) => {
 
       case 'user_joined':
       case 'user_left':
+        if (hooks.onActiveUsersUpdate && message.data.activeUsers) {
+          hooks.onActiveUsersUpdate(message.data.activeUsers);
+        }
+        break;
+
       case 'cursor_update':
-        // Handle active users update
+        if (hooks.onCursorUpdate && message.data.userId && message.data.cursor) {
+          hooks.onCursorUpdate(message.data.userId, message.data.cursor);
+        }
         break;
 
       case 'object_create':

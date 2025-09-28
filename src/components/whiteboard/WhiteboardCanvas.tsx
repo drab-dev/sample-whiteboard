@@ -1,9 +1,14 @@
-import React, { useRef, useEffect, useState } from 'react';
-import { ArrowLeft } from 'lucide-react';
+import React, { useRef, useEffect, useState, useCallback } from 'react';
+import { ArrowLeft, Layers, Users, Share2, Sparkles } from 'lucide-react';
 import { Whiteboard, CanvasObject, ActiveUser } from '../../types';
 import { WhiteboardToolbar } from './WhiteboardToolbar';
 import { ActiveCollaborators } from './ActiveCollaborators';
+import { LayersPanel } from './LayersPanel';
+import { CollaborationPanel } from './CollaborationPanel';
+import { AIPanel } from './AIPanel';
+import { MermaidRenderer } from './MermaidRenderer';
 import { useWebSocket } from '../../hooks/useWebSocket';
+import { fabric } from 'fabric';
 
 interface WhiteboardCanvasProps {
   whiteboardId: string;
@@ -14,19 +19,17 @@ export const WhiteboardCanvas: React.FC<WhiteboardCanvasProps> = ({
   whiteboardId,
   onBack
 }) => {
-  const canvasRef = useRef<HTMLCanvasElement>(null);
+  const canvasContainerRef = useRef<HTMLDivElement>(null);
+  const fabricCanvasRef = useRef<fabric.Canvas | null>(null);
   const [whiteboard, setWhiteboard] = useState<Whiteboard | null>(null);
   const [loading, setLoading] = useState(true);
-  const [selectedTool, setSelectedTool] = useState<'select' | 'text' | 'rect' | 'circle' | 'arrow' | 'pen'>('select');
-  const [isDrawing, setIsDrawing] = useState(false);
-  const [draggedObject, setDraggedObject] = useState<string | null>(null);
-  const [lastMousePos, setLastMousePos] = useState({ x: 0, y: 0 });
+  const [selectedTool, setSelectedTool] = useState<'select' | 'text' | 'rect' | 'circle' | 'arrow' | 'pen' | 'mermaid'>('select');
   const [objects, setObjects] = useState<CanvasObject[]>([]);
   const [activeUsers, setActiveUsers] = useState<ActiveUser[]>([]);
   const [selectedObject, setSelectedObject] = useState<string | null>(null);
-  const [editingText, setEditingText] = useState<string | null>(null);
-  const [textInput, setTextInput] = useState('');
-  const [penPath, setPenPath] = useState<{x: number, y: number}[]>([]);
+  const [showLayersPanel, setShowLayersPanel] = useState(false);
+  const [showCollaborationPanel, setShowCollaborationPanel] = useState(false);
+  const [showAIPanel, setShowAIPanel] = useState(false);
   
   // Style states
   const [selectedColor, setSelectedColor] = useState('#000000');
@@ -45,40 +48,44 @@ export const WhiteboardCanvas: React.FC<WhiteboardCanvasProps> = ({
     onWhiteboardUpdate: (updatedWhiteboard: Whiteboard) => {
       setWhiteboard(updatedWhiteboard);
       setObjects(updatedWhiteboard.content.objects);
+      syncObjectsToCanvas(updatedWhiteboard.content.objects);
     },
     onActiveUsersUpdate: (users: ActiveUser[]) => {
       setActiveUsers(users);
     },
     onObjectUpdate: (object: CanvasObject) => {
       setObjects(prev => prev.map(obj => obj.id === object.id ? object : obj));
+      updateFabricObject(object);
     },
     onObjectCreate: (object: CanvasObject) => {
       setObjects(prev => [...prev, object]);
+      addFabricObject(object);
     },
     onObjectDelete: (objectId: string) => {
       setObjects(prev => prev.filter(obj => obj.id !== objectId));
+      removeFabricObject(objectId);
+    },
+    onCursorUpdate: (userId: string, cursor: { x: number; y: number }) => {
+      updateUserCursor(userId, cursor);
     }
   });
 
   useEffect(() => {
     fetchWhiteboard();
+    initializeFabricCanvas();
+    
+    return () => {
+      if (fabricCanvasRef.current) {
+        fabricCanvasRef.current.dispose();
+      }
+    };
   }, [whiteboardId]);
 
   useEffect(() => {
-    const canvas = canvasRef.current;
-    if (!canvas) return;
-
-    const ctx = canvas.getContext('2d');
-    if (!ctx) return;
-
-    // Set canvas size
-    const rect = canvas.getBoundingClientRect();
-    canvas.width = rect.width * window.devicePixelRatio;
-    canvas.height = rect.height * window.devicePixelRatio;
-    ctx.scale(window.devicePixelRatio, window.devicePixelRatio);
-
-    drawCanvas(ctx);
-  }, [objects, activeUsers]);
+    if (fabricCanvasRef.current) {
+      setupCanvasEvents();
+    }
+  }, [selectedTool, selectedColor, selectedFillColor, strokeWidth, fontSize, fontFamily, textStyle]);
 
   const fetchWhiteboard = async () => {
     try {
@@ -98,294 +105,181 @@ export const WhiteboardCanvas: React.FC<WhiteboardCanvasProps> = ({
     }
   };
 
-  const drawCanvas = (ctx: CanvasRenderingContext2D) => {
-    const canvas = canvasRef.current!;
-    
-    // Clear canvas
-    ctx.fillStyle = '#ffffff';
-    ctx.fillRect(0, 0, canvas.width / window.devicePixelRatio, canvas.height / window.devicePixelRatio);
+  const initializeFabricCanvas = () => {
+    if (!canvasContainerRef.current) return;
 
-    // Draw grid
-    drawGrid(ctx);
+    const canvas = new fabric.Canvas('whiteboard-canvas', {
+      width: canvasContainerRef.current.clientWidth,
+      height: canvasContainerRef.current.clientHeight,
+      backgroundColor: '#ffffff',
+      selection: selectedTool === 'select'
+    });
 
-    // Draw objects
-    objects.forEach(obj => drawObject(ctx, obj));
+    fabricCanvasRef.current = canvas;
 
-    // Draw cursors
-    activeUsers.forEach(user => drawCursor(ctx, user));
-  };
-
-  const drawGrid = (ctx: CanvasRenderingContext2D) => {
-    const canvas = canvasRef.current!;
-    const gridSize = 20;
-    
-    ctx.strokeStyle = '#f0f0f0';
-    ctx.lineWidth = 0.5;
-    
-    for (let x = 0; x <= canvas.width / window.devicePixelRatio; x += gridSize) {
-      ctx.beginPath();
-      ctx.moveTo(x, 0);
-      ctx.lineTo(x, canvas.height / window.devicePixelRatio);
-      ctx.stroke();
-    }
-    
-    for (let y = 0; y <= canvas.height / window.devicePixelRatio; y += gridSize) {
-      ctx.beginPath();
-      ctx.moveTo(0, y);
-      ctx.lineTo(canvas.width / window.devicePixelRatio, y);
-      ctx.stroke();
-    }
-  };
-
-  const drawObject = (ctx: CanvasRenderingContext2D, obj: CanvasObject) => {
-    ctx.save();
-    
-    const style = obj.style || {};
-    ctx.globalAlpha = style.opacity || 1;
-    ctx.fillStyle = style.backgroundColor || selectedFillColor;
-    ctx.strokeStyle = style.color || selectedColor;
-    ctx.lineWidth = style.strokeWidth || strokeWidth;
-
-    switch (obj.type) {
-      case 'text':
-        ctx.fillStyle = style.color || selectedColor;
-        const fontWeight = style.bold ? 'bold' : 'normal';
-        const fontStyle = style.italic ? 'italic' : 'normal';
-        const fontSize = style.fontSize || 16;
-        const fontFamily = style.fontFamily || 'Arial';
-        ctx.font = `${fontStyle} ${fontWeight} ${fontSize}px ${fontFamily}`;
-        
-        const lines = (obj.content || '').split('\n');
-        lines.forEach((line, index) => {
-          ctx.fillText(line, obj.x, obj.y + (index * fontSize * 1.2));
+    // Handle window resize
+    const handleResize = () => {
+      if (canvasContainerRef.current && fabricCanvasRef.current) {
+        fabricCanvasRef.current.setDimensions({
+          width: canvasContainerRef.current.clientWidth,
+          height: canvasContainerRef.current.clientHeight
         });
-        
-        if (style.underline) {
-          const textWidth = ctx.measureText(obj.content || '').width;
-          ctx.beginPath();
-          ctx.moveTo(obj.x, obj.y + 2);
-          ctx.lineTo(obj.x + textWidth, obj.y + 2);
-          ctx.stroke();
-        }
-        break;
-
-      case 'shape':
-        if (obj.content === 'rectangle') {
-          if (style.backgroundColor) {
-            ctx.fillRect(obj.x, obj.y, obj.width || 100, obj.height || 60);
-          }
-          ctx.strokeRect(obj.x, obj.y, obj.width || 100, obj.height || 60);
-        } else if (obj.content === 'circle') {
-          const radius = Math.min(obj.width || 60, obj.height || 60) / 2;
-          ctx.beginPath();
-          ctx.arc(obj.x + radius, obj.y + radius, radius, 0, 2 * Math.PI);
-          if (style.backgroundColor) {
-            ctx.fill();
-          }
-          ctx.stroke();
-        }
-        break;
-
-      case 'line':
-        ctx.beginPath();
-        if (obj.content === 'arrow') {
-          // Draw arrow
-          const endX = obj.x + (obj.width || 100);
-          const endY = obj.y + (obj.height || 0);
-          
-          // Main line
-          ctx.moveTo(obj.x, obj.y);
-          ctx.lineTo(endX, endY);
-          
-          // Arrow head
-          const angle = Math.atan2(endY - obj.y, endX - obj.x);
-          const headLength = 15;
-          ctx.lineTo(
-            endX - headLength * Math.cos(angle - Math.PI / 6),
-            endY - headLength * Math.sin(angle - Math.PI / 6)
-          );
-          ctx.moveTo(endX, endY);
-          ctx.lineTo(
-            endX - headLength * Math.cos(angle + Math.PI / 6),
-            endY - headLength * Math.sin(angle + Math.PI / 6)
-          );
-        } else {
-          // Free drawing
-          ctx.moveTo(obj.x, obj.y);
-          if (obj.points && obj.points.length > 0) {
-            obj.points.forEach(point => {
-              ctx.lineTo(point.x, point.y);
-            });
-          }
-        }
-        ctx.stroke();
-        break;
-    }
-    
-    ctx.restore();
-  };
-
-  const drawCursor = (ctx: CanvasRenderingContext2D, user: ActiveUser) => {
-    ctx.save();
-    ctx.fillStyle = user.color;
-    
-    // Draw cursor
-    ctx.beginPath();
-    ctx.moveTo(user.cursor.x, user.cursor.y);
-    ctx.lineTo(user.cursor.x + 12, user.cursor.y + 4);
-    ctx.lineTo(user.cursor.x + 5, user.cursor.y + 11);
-    ctx.closePath();
-    ctx.fill();
-
-    // Draw name
-    ctx.fillStyle = '#fff';
-    ctx.fillRect(user.cursor.x + 15, user.cursor.y - 8, user.name.length * 7 + 8, 20);
-    ctx.fillStyle = user.color;
-    ctx.font = '12px Arial';
-    ctx.fillText(user.name, user.cursor.x + 19, user.cursor.y + 6);
-    
-    ctx.restore();
-  };
-
-  const handleMouseDown = (e: React.MouseEvent<HTMLCanvasElement>) => {
-    const canvas = canvasRef.current!;
-    const rect = canvas.getBoundingClientRect();
-    const x = e.clientX - rect.left;
-    const y = e.clientY - rect.top;
-
-    setLastMousePos({ x, y });
-
-    if (selectedTool === 'select') {
-      // Check if clicking on existing object
-      const clickedObject = findObjectAt(x, y);
-      if (clickedObject) {
-        setDraggedObject(clickedObject.id);
-        setSelectedObject(clickedObject.id);
-      } else {
-        setSelectedObject(null);
       }
-    } else if (selectedTool === 'pen') {
-      // Start free drawing
-      setIsDrawing(true);
-      setPenPath([{ x, y }]);
-    } else if (selectedTool === 'text') {
-      // Create text or start editing
-      const clickedObject = findObjectAt(x, y);
-      if (clickedObject && clickedObject.type === 'text') {
-        setEditingText(clickedObject.id);
-        setTextInput(clickedObject.content || '');
-      } else {
-        createObject(x, y, 'text');
-      }
-    } else {
-      // Create new shape/arrow
-      setIsDrawing(true);
-      createObject(x, y);
-    }
+    };
+
+    window.addEventListener('resize', handleResize);
+    return () => window.removeEventListener('resize', handleResize);
   };
 
-  const handleMouseMove = (e: React.MouseEvent<HTMLCanvasElement>) => {
-    const canvas = canvasRef.current!;
-    const rect = canvas.getBoundingClientRect();
-    const x = e.clientX - rect.left;
-    const y = e.clientY - rect.top;
+  const setupCanvasEvents = () => {
+    const canvas = fabricCanvasRef.current;
+    if (!canvas) return;
 
-    // Send cursor position
+    canvas.selection = selectedTool === 'select';
+    canvas.defaultCursor = selectedTool === 'select' ? 'default' : 'crosshair';
+
+    // Mouse events
+    canvas.on('mouse:down', handleCanvasMouseDown);
+    canvas.on('mouse:move', handleCanvasMouseMove);
+    canvas.on('object:modified', handleObjectModified);
+    canvas.on('selection:created', handleSelectionCreated);
+    canvas.on('selection:cleared', handleSelectionCleared);
+  };
+
+  const handleCanvasMouseDown = (e: fabric.IEvent) => {
+    if (selectedTool === 'select') return;
+
+    const pointer = fabricCanvasRef.current?.getPointer(e.e);
+    if (!pointer) return;
+
+    createCanvasObject(pointer.x, pointer.y);
+  };
+
+  const handleCanvasMouseMove = (e: fabric.IEvent) => {
+    const pointer = fabricCanvasRef.current?.getPointer(e.e);
+    if (!pointer) return;
+
+    // Send cursor position to other users
     sendMessage({
       type: 'cursor',
       whiteboardId,
-      data: { x, y }
+      data: { x: pointer.x, y: pointer.y }
     });
-
-    if (selectedTool === 'pen' && isDrawing) {
-      setPenPath(prev => [...prev, { x, y }]);
-    } else if (draggedObject) {
-      const dx = x - lastMousePos.x;
-      const dy = y - lastMousePos.y;
-      moveObject(draggedObject, dx, dy);
-      setLastMousePos({ x, y });
-    }
   };
 
-  const handleMouseUp = () => {
-    if (selectedTool === 'pen' && isDrawing && penPath.length > 1) {
-      // Create pen stroke object
-      const newObject: CanvasObject = {
-        id: `obj_${Date.now()}_${Math.random()}`,
-        type: 'line',
-        x: penPath[0].x,
-        y: penPath[0].y,
-        points: penPath.slice(1),
-        style: {
-          color: selectedColor,
-          strokeWidth: strokeWidth,
-          opacity: opacity
-        }
-      };
+  const handleObjectModified = (e: fabric.IEvent) => {
+    const obj = e.target;
+    if (!obj || !obj.data) return;
 
-      sendMessage({
-        type: 'object_create',
-        whiteboardId,
-        data: { object: newObject }
-      });
-      
-      setPenPath([]);
-    }
-    
-    setIsDrawing(false);
-    setDraggedObject(null);
-  };
-
-  const findObjectAt = (x: number, y: number): CanvasObject | null => {
-    // Find topmost object at position
-    for (let i = objects.length - 1; i >= 0; i--) {
-      const obj = objects[i];
-      if (isPointInObject(x, y, obj)) {
-        return obj;
-      }
-    }
-    return null;
-  };
-
-  const isPointInObject = (x: number, y: number, obj: CanvasObject): boolean => {
-    switch (obj.type) {
-      case 'text':
-        return x >= obj.x && x <= obj.x + 100 && y >= obj.y - 20 && y <= obj.y;
-      case 'shape':
-        return x >= obj.x && x <= obj.x + (obj.width || 100) && 
-               y >= obj.y && y <= obj.y + (obj.height || 60);
-      default:
-        return false;
-    }
-  };
-
-  const createObject = (x: number, y: number) => {
-    const newObject: CanvasObject = {
-      id: `obj_${Date.now()}_${Math.random()}`,
-      type: selectedTool === 'text' ? 'text' : selectedTool === 'arrow' ? 'line' : 'shape',
-      x,
-      y,
-      content: selectedTool === 'text' ? 'New Text' : 
-               selectedTool === 'rect' ? 'rectangle' : 
-               selectedTool === 'circle' ? 'circle' :
-               selectedTool === 'arrow' ? 'arrow' : '',
-      width: selectedTool === 'text' ? undefined : 
-             selectedTool === 'arrow' ? 100 : 100,
-      height: selectedTool === 'text' ? undefined : 
-              selectedTool === 'circle' ? 100 : 
-              selectedTool === 'arrow' ? 0 : 60,
-      style: {
-        backgroundColor: selectedTool === 'text' ? undefined : selectedFillColor,
-        color: selectedTool === 'text' ? selectedColor : selectedColor,
-        fontSize: selectedTool === 'text' ? fontSize : undefined,
-        fontFamily: selectedTool === 'text' ? fontFamily : undefined,
-        bold: selectedTool === 'text' ? textStyle.bold : undefined,
-        italic: selectedTool === 'text' ? textStyle.italic : undefined,
-        underline: selectedTool === 'text' ? textStyle.underline : undefined,
-        strokeWidth: strokeWidth,
-        opacity: opacity
-      }
+    const canvasObject: CanvasObject = {
+      ...obj.data,
+      x: obj.left || 0,
+      y: obj.top || 0,
+      width: obj.width ? obj.width * (obj.scaleX || 1) : undefined,
+      height: obj.height ? obj.height * (obj.scaleY || 1) : undefined
     };
+
+    sendMessage({
+      type: 'object_update',
+      whiteboardId,
+      data: { object: canvasObject }
+    });
+  };
+
+  const handleSelectionCreated = (e: fabric.IEvent) => {
+    const obj = e.target;
+    if (obj && obj.data) {
+      setSelectedObject(obj.data.id);
+    }
+  };
+
+  const handleSelectionCleared = () => {
+    setSelectedObject(null);
+  };
+
+  const createCanvasObject = (x: number, y: number) => {
+    const id = `obj_${Date.now()}_${Math.random()}`;
+    let newObject: CanvasObject;
+
+    switch (selectedTool) {
+      case 'text':
+        newObject = {
+          id,
+          type: 'text',
+          x,
+          y,
+          content: 'Double click to edit',
+          layer: objects.length,
+          style: {
+            color: selectedColor,
+            fontSize,
+            fontFamily,
+            bold: textStyle.bold,
+            italic: textStyle.italic,
+            underline: textStyle.underline,
+            opacity
+          }
+        };
+        break;
+
+      case 'rect':
+        newObject = {
+          id,
+          type: 'shape',
+          x,
+          y,
+          width: 100,
+          height: 60,
+          content: 'rectangle',
+          layer: objects.length,
+          style: {
+            color: selectedColor,
+            backgroundColor: selectedFillColor,
+            strokeWidth,
+            opacity
+          }
+        };
+        break;
+
+      case 'circle':
+        newObject = {
+          id,
+          type: 'shape',
+          x,
+          y,
+          width: 80,
+          height: 80,
+          content: 'circle',
+          layer: objects.length,
+          style: {
+            color: selectedColor,
+            backgroundColor: selectedFillColor,
+            strokeWidth,
+            opacity
+          }
+        };
+        break;
+
+      case 'arrow':
+        newObject = {
+          id,
+          type: 'arrow',
+          x,
+          y,
+          width: 100,
+          height: 0,
+          layer: objects.length,
+          style: {
+            color: selectedColor,
+            strokeWidth,
+            opacity
+          }
+        };
+        break;
+
+      default:
+        return;
+    }
 
     sendMessage({
       type: 'object_create',
@@ -394,26 +288,191 @@ export const WhiteboardCanvas: React.FC<WhiteboardCanvasProps> = ({
     });
   };
 
-  const moveObject = (objectId: string, dx: number, dy: number) => {
-    const objectIndex = objects.findIndex(obj => obj.id === objectId);
-    if (objectIndex === -1) return;
+  const addFabricObject = (obj: CanvasObject) => {
+    const canvas = fabricCanvasRef.current;
+    if (!canvas) return;
 
-    const updatedObject = {
-      ...objects[objectIndex],
-      x: objects[objectIndex].x + dx,
-      y: objects[objectIndex].y + dy
-    };
+    let fabricObj: fabric.Object;
+
+    switch (obj.type) {
+      case 'text':
+        fabricObj = new fabric.IText(obj.content || '', {
+          left: obj.x,
+          top: obj.y,
+          fontSize: obj.style?.fontSize || 16,
+          fontFamily: obj.style?.fontFamily || 'Arial',
+          fill: obj.style?.color || '#000000',
+          fontWeight: obj.style?.bold ? 'bold' : 'normal',
+          fontStyle: obj.style?.italic ? 'italic' : 'normal',
+          underline: obj.style?.underline || false,
+          opacity: obj.style?.opacity || 1
+        });
+        break;
+
+      case 'shape':
+        if (obj.content === 'rectangle') {
+          fabricObj = new fabric.Rect({
+            left: obj.x,
+            top: obj.y,
+            width: obj.width || 100,
+            height: obj.height || 60,
+            fill: obj.style?.backgroundColor || 'transparent',
+            stroke: obj.style?.color || '#000000',
+            strokeWidth: obj.style?.strokeWidth || 2,
+            opacity: obj.style?.opacity || 1
+          });
+        } else {
+          fabricObj = new fabric.Circle({
+            left: obj.x,
+            top: obj.y,
+            radius: (obj.width || 80) / 2,
+            fill: obj.style?.backgroundColor || 'transparent',
+            stroke: obj.style?.color || '#000000',
+            strokeWidth: obj.style?.strokeWidth || 2,
+            opacity: obj.style?.opacity || 1
+          });
+        }
+        break;
+
+      case 'arrow':
+        const points = [obj.x, obj.y, obj.x + (obj.width || 100), obj.y + (obj.height || 0)];
+        fabricObj = new fabric.Line(points, {
+          stroke: obj.style?.color || '#000000',
+          strokeWidth: obj.style?.strokeWidth || 2,
+          opacity: obj.style?.opacity || 1
+        });
+        break;
+
+      default:
+        return;
+    }
+
+    fabricObj.data = obj;
+    fabricObj.selectable = selectedTool === 'select';
+    canvas.add(fabricObj);
+    canvas.renderAll();
+  };
+
+  const updateFabricObject = (obj: CanvasObject) => {
+    const canvas = fabricCanvasRef.current;
+    if (!canvas) return;
+
+    const fabricObj = canvas.getObjects().find(o => o.data?.id === obj.id);
+    if (!fabricObj) return;
+
+    fabricObj.set({
+      left: obj.x,
+      top: obj.y,
+      width: obj.width,
+      height: obj.height
+    });
+
+    fabricObj.data = obj;
+    canvas.renderAll();
+  };
+
+  const removeFabricObject = (objectId: string) => {
+    const canvas = fabricCanvasRef.current;
+    if (!canvas) return;
+
+    const fabricObj = canvas.getObjects().find(o => o.data?.id === objectId);
+    if (fabricObj) {
+      canvas.remove(fabricObj);
+      canvas.renderAll();
+    }
+  };
+
+  const syncObjectsToCanvas = (objects: CanvasObject[]) => {
+    const canvas = fabricCanvasRef.current;
+    if (!canvas) return;
+
+    canvas.clear();
+    objects.forEach(obj => addFabricObject(obj));
+  };
+
+  const updateUserCursor = (userId: string, cursor: { x: number; y: number }) => {
+    setActiveUsers(prev => prev.map(user => 
+      user.id === userId ? { ...user, cursor } : user
+    ));
+  };
+
+  const handleLayerChange = (objectId: string, direction: 'forward' | 'backward' | 'front' | 'back') => {
+    const canvas = fabricCanvasRef.current;
+    if (!canvas) return;
+
+    const fabricObj = canvas.getObjects().find(o => o.data?.id === objectId);
+    if (!fabricObj) return;
+
+    switch (direction) {
+      case 'forward':
+        canvas.bringForward(fabricObj);
+        break;
+      case 'backward':
+        canvas.sendBackwards(fabricObj);
+        break;
+      case 'front':
+        canvas.bringToFront(fabricObj);
+        break;
+      case 'back':
+        canvas.sendToBack(fabricObj);
+        break;
+    }
+
+    canvas.renderAll();
+  };
+
+  const handleDeleteSelected = () => {
+    if (!selectedObject) return;
 
     sendMessage({
-      type: 'object_update',
+      type: 'object_delete',
       whiteboardId,
-      data: { object: updatedObject }
+      data: { objectId: selectedObject }
     });
+  };
+
+  const handleAIGenerate = async (prompt: string, type: 'diagram' | 'mermaid') => {
+    try {
+      const response = await fetch('/api/ai/generate', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({ prompt, type, whiteboardId }),
+        credentials: 'include'
+      });
+
+      if (response.ok) {
+        const data = await response.json();
+        
+        if (type === 'mermaid') {
+          const newObject: CanvasObject = {
+            id: `mermaid_${Date.now()}_${Math.random()}`,
+            type: 'mermaid',
+            x: 100,
+            y: 100,
+            width: 400,
+            height: 300,
+            content: data.title || 'AI Generated Diagram',
+            mermaidCode: data.mermaidCode,
+            layer: objects.length
+          };
+
+          sendMessage({
+            type: 'object_create',
+            whiteboardId,
+            data: { object: newObject }
+          });
+        }
+      }
+    } catch (error) {
+      console.error('AI generation failed:', error);
+    }
   };
 
   if (loading) {
     return (
-      <div className="h-screen flex items-center justify-center">
+      <div className="h-screen flex items-center justify-center bg-gradient-to-br from-blue-50 to-indigo-100">
         <div className="text-center">
           <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-blue-600 mx-auto mb-4"></div>
           <p className="text-gray-600">Loading whiteboard...</p>
@@ -424,12 +483,12 @@ export const WhiteboardCanvas: React.FC<WhiteboardCanvasProps> = ({
 
   if (!whiteboard) {
     return (
-      <div className="h-screen flex items-center justify-center">
+      <div className="h-screen flex items-center justify-center bg-gradient-to-br from-blue-50 to-indigo-100">
         <div className="text-center">
           <p className="text-gray-600 mb-4">Whiteboard not found</p>
           <button
             onClick={onBack}
-            className="px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700"
+            className="px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-colors"
           >
             Go Back
           </button>
@@ -439,7 +498,7 @@ export const WhiteboardCanvas: React.FC<WhiteboardCanvasProps> = ({
   }
 
   return (
-    <div className="h-screen bg-gray-100 flex flex-col">
+    <div className="h-screen bg-gradient-to-br from-gray-50 to-blue-50 flex flex-col">
       {/* Header */}
       <header className="bg-white shadow-sm border-b border-gray-200 px-6 py-4">
         <div className="flex items-center justify-between">
@@ -460,7 +519,35 @@ export const WhiteboardCanvas: React.FC<WhiteboardCanvasProps> = ({
             </div>
           </div>
           
-          <ActiveCollaborators users={activeUsers} />
+          <div className="flex items-center space-x-4">
+            <ActiveCollaborators users={activeUsers} />
+            
+            <div className="flex items-center space-x-2 border-l border-gray-200 pl-4">
+              <button
+                onClick={() => setShowLayersPanel(!showLayersPanel)}
+                className={`p-2 rounded-lg transition-colors ${showLayersPanel ? 'bg-blue-100 text-blue-600' : 'text-gray-600 hover:bg-gray-100'}`}
+                title="Layers"
+              >
+                <Layers size={20} />
+              </button>
+              
+              <button
+                onClick={() => setShowCollaborationPanel(!showCollaborationPanel)}
+                className={`p-2 rounded-lg transition-colors ${showCollaborationPanel ? 'bg-blue-100 text-blue-600' : 'text-gray-600 hover:bg-gray-100'}`}
+                title="Collaboration"
+              >
+                <Share2 size={20} />
+              </button>
+              
+              <button
+                onClick={() => setShowAIPanel(!showAIPanel)}
+                className={`p-2 rounded-lg transition-colors ${showAIPanel ? 'bg-purple-100 text-purple-600' : 'text-gray-600 hover:bg-gray-100'}`}
+                title="AI Tools"
+              >
+                <Sparkles size={20} />
+              </button>
+            </div>
+          </div>
         </div>
       </header>
 
@@ -482,63 +569,69 @@ export const WhiteboardCanvas: React.FC<WhiteboardCanvasProps> = ({
         onFontFamilyChange={setFontFamily}
         textStyle={textStyle}
         onTextStyleChange={(newStyle) => setTextStyle(prev => ({ ...prev, ...newStyle }))}
+        onDeleteSelected={handleDeleteSelected}
+        hasSelection={!!selectedObject}
       />
 
-      {/* Canvas */}
-      <div className="flex-1 relative">
-        <canvas
-          ref={canvasRef}
-          className="w-full h-full cursor-crosshair"
-          onMouseDown={handleMouseDown}
-          onMouseMove={handleMouseMove}
-          onMouseUp={handleMouseUp}
-          onMouseLeave={handleMouseUp}
-        />
-        
-        {/* Text input overlay */}
-        {editingText && (
-          <div className="absolute inset-0 pointer-events-none">
-            <textarea
-              value={textInput}
-              onChange={(e) => setTextInput(e.target.value)}
-              onBlur={() => {
-                if (editingText && textInput.trim()) {
-                  // Update the text object
-                  const updatedObject = objects.find(obj => obj.id === editingText);
-                  if (updatedObject) {
-                    const newObject = { ...updatedObject, content: textInput };
-                    sendMessage({
-                      type: 'object_update',
-                      whiteboardId,
-                      data: { object: newObject }
-                    });
-                  }
-                }
-                setEditingText(null);
-                setTextInput('');
-              }}
-              onKeyDown={(e) => {
-                if (e.key === 'Enter' && !e.shiftKey) {
-                  e.preventDefault();
-                  e.currentTarget.blur();
-                }
-              }}
-              className="pointer-events-auto absolute bg-transparent border-2 border-blue-500 rounded p-1 resize-none"
+      {/* Main Content */}
+      <div className="flex-1 flex relative">
+        {/* Canvas */}
+        <div className="flex-1 relative" ref={canvasContainerRef}>
+          <canvas id="whiteboard-canvas" className="absolute inset-0" />
+          
+          {/* User Cursors */}
+          {activeUsers.map(user => (
+            <div
+              key={user.id}
+              className="absolute pointer-events-none z-10 transition-all duration-100"
               style={{
-                left: objects.find(obj => obj.id === editingText)?.x || 0,
-                top: (objects.find(obj => obj.id === editingText)?.y || 0) - 20,
-                fontSize: fontSize,
-                fontFamily: fontFamily,
-                fontWeight: textStyle.bold ? 'bold' : 'normal',
-                fontStyle: textStyle.italic ? 'italic' : 'normal',
-                textDecoration: textStyle.underline ? 'underline' : 'none',
-                color: selectedColor
+                left: user.cursor.x,
+                top: user.cursor.y,
+                transform: 'translate(-2px, -2px)'
               }}
-              autoFocus
-            />
-          </div>
+            >
+              <div 
+                className="w-4 h-4 rounded-full border-2 border-white shadow-lg"
+                style={{ backgroundColor: user.color }}
+              />
+              <div 
+                className="mt-1 px-2 py-1 text-xs text-white rounded shadow-lg whitespace-nowrap"
+                style={{ backgroundColor: user.color }}
+              >
+                {user.name}
+              </div>
+            </div>
+          ))}
+        </div>
+
+        {/* Side Panels */}
+        {showLayersPanel && (
+          <LayersPanel
+            objects={objects}
+            selectedObject={selectedObject}
+            onSelectObject={setSelectedObject}
+            onLayerChange={handleLayerChange}
+            onClose={() => setShowLayersPanel(false)}
+          />
+        )}
+
+        {showCollaborationPanel && (
+          <CollaborationPanel
+            whiteboard={whiteboard}
+            onClose={() => setShowCollaborationPanel(false)}
+          />
+        )}
+
+        {showAIPanel && (
+          <AIPanel
+            onGenerate={handleAIGenerate}
+            onClose={() => setShowAIPanel(false)}
+          />
         )}
       </div>
+
+      {/* Mermaid Renderer (hidden) */}
+      <MermaidRenderer />
     </div>
   );
 };

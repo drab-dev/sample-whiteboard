@@ -12,6 +12,7 @@ import { fileURLToPath } from 'url';
 
 import authRoutes from './routes/auth.js';
 import whiteboardRoutes from './routes/whiteboards.js';
+import aiRoutes from './routes/ai.js';
 import { WhiteboardWebSocket } from './websocket.js';
 
 const __filename = fileURLToPath(import.meta.url);
@@ -32,6 +33,7 @@ app.use(cookieParser());
 // Routes
 app.use('/api/auth', authRoutes);
 app.use('/api/whiteboards', whiteboardRoutes);
+app.use('/api/ai', aiRoutes);
 
 // Health check
 app.get('/api/health', (req, res) => {

@@ -1,6 +1,7 @@
 import { Router, Response } from 'express';
 import { requireAuth, requireWhiteboardAccess, AuthRequest } from '../auth.js';
 import { Database } from '../database.js';
+import { v4 as uuidv4 } from 'uuid';
 
 const router = Router();
 
@@ -142,6 +143,40 @@ router.post('/:id/share', async (req: AuthRequest, res: Response) => {
   } catch (error) {
     console.error('Share whiteboard error:', error);
     res.status(500).json({ error: 'Failed to share whiteboard' });
+  }
+});
+
+// Get share links for whiteboard
+router.get('/:id/share-links', requireWhiteboardAccess('editor'), async (req: AuthRequest, res: Response) => {
+  try {
+    const shareLinks = await Database.getWhiteboardShareLinks(req.params.id);
+    res.json(shareLinks);
+  } catch (error) {
+    console.error('Get share links error:', error);
+    res.status(500).json({ error: 'Failed to fetch share links' });
+  }
+});
+
+// Create share link
+router.post('/:id/share-links', requireWhiteboardAccess('editor'), async (req: AuthRequest, res: Response) => {
+  try {
+    const { permission } = req.body;
+    const shareLink = await Database.createShareLink(req.params.id, permission);
+    res.json(shareLink);
+  } catch (error) {
+    console.error('Create share link error:', error);
+    res.status(500).json({ error: 'Failed to create share link' });
+  }
+});
+
+// Delete share link
+router.delete('/:id/share-links/:linkId', requireWhiteboardAccess('editor'), async (req: AuthRequest, res: Response) => {
+  try {
+    await Database.deleteShareLink(req.params.linkId);
+    res.json({ message: 'Share link deleted successfully' });
+  } catch (error) {
+    console.error('Delete share link error:', error);
+    res.status(500).json({ error: 'Failed to delete share link' });
   }
 });
 

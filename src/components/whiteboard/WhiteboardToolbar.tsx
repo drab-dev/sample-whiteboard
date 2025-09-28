@@ -1,12 +1,12 @@
 import React, { useState } from 'react';
 import { 
-  MousePointer, Type, Square, Circle, ArrowRight, Undo, Redo, 
-  Palette, Eye, Minus, Bold, Italic, Underline
+  MousePointer, Type, Square, Circle, ArrowRight, Undo, Redo, Trash2,
+  Palette, Eye, Minus, Bold, Italic, Underline, GitBranch
 } from 'lucide-react';
 
 interface WhiteboardToolbarProps {
-  selectedTool: 'select' | 'text' | 'rect' | 'circle' | 'arrow' | 'pen';
-  onToolChange: (tool: 'select' | 'text' | 'rect' | 'circle' | 'arrow' | 'pen') => void;
+  selectedTool: 'select' | 'text' | 'rect' | 'circle' | 'arrow' | 'pen' | 'mermaid';
+  onToolChange: (tool: 'select' | 'text' | 'rect' | 'circle' | 'arrow' | 'pen' | 'mermaid') => void;
   selectedColor: string;
   onColorChange: (color: string) => void;
   selectedFillColor: string;
@@ -25,6 +25,8 @@ interface WhiteboardToolbarProps {
     underline: boolean;
   };
   onTextStyleChange: (style: { bold?: boolean; italic?: boolean; underline?: boolean }) => void;
+  onDeleteSelected: () => void;
+  hasSelection: boolean;
 }
 
 export const WhiteboardToolbar: React.FC<WhiteboardToolbarProps> = ({
@@ -43,7 +45,9 @@ export const WhiteboardToolbar: React.FC<WhiteboardToolbarProps> = ({
   fontFamily,
   onFontFamilyChange,
   textStyle,
-  onTextStyleChange
+  onTextStyleChange,
+  onDeleteSelected,
+  hasSelection
 }) => {
   const [showColorPicker, setShowColorPicker] = useState(false);
   const [showFillColorPicker, setShowFillColorPicker] = useState(false);
@@ -54,7 +58,8 @@ export const WhiteboardToolbar: React.FC<WhiteboardToolbarProps> = ({
     { id: 'text' as const, icon: Type, label: 'Text' },
     { id: 'rect' as const, icon: Square, label: 'Rectangle' },
     { id: 'circle' as const, icon: Circle, label: 'Circle' },
-    { id: 'arrow' as const, icon: ArrowRight, label: 'Arrow' }
+    { id: 'arrow' as const, icon: ArrowRight, label: 'Arrow' },
+    { id: 'mermaid' as const, icon: GitBranch, label: 'Mermaid Diagram' }
   ];
 
   const colors = [
@@ -64,8 +69,9 @@ export const WhiteboardToolbar: React.FC<WhiteboardToolbarProps> = ({
   ];
 
   const fontFamilies = [
-    'Arial', 'Helvetica', 'Times New Roman', 'Georgia', 'Verdana',
-    'Courier New', 'Comic Sans MS', 'Impact', 'Trebuchet MS'
+    'Arial', 'Helvetica', 'Times New Roman', 'Georgia', 'Verdana', 'Courier New', 
+    'Comic Sans MS', 'Impact', 'Trebuchet MS', 'Pacifico', 'Roboto', 'Open Sans',
+    'Lato', 'Montserrat', 'Poppins', 'Playfair Display', 'Dancing Script'
   ];
 
   return (
@@ -239,7 +245,17 @@ export const WhiteboardToolbar: React.FC<WhiteboardToolbarProps> = ({
         )}
 
         {/* Actions */}
-        <div className="flex items-center space-x-1 ml-auto">
+        <div className="flex items-center space-x-2 ml-auto">
+          {hasSelection && (
+            <button
+              onClick={onDeleteSelected}
+              className="p-2 text-red-600 hover:bg-red-50 hover:text-red-700 rounded-lg transition-colors"
+              title="Delete Selected"
+            >
+              <Trash2 size={20} />
+            </button>
+          )}
+          
           <button
             className="p-2 text-gray-600 hover:bg-gray-100 hover:text-gray-900 rounded-lg transition-colors"
             title="Undo"
