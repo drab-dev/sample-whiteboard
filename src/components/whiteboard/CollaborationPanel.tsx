@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { X, Link, Copy, Users, Shield, MessageCircle, Edit3, Check, ExternalLink } from 'lucide-react';
+import { X, Link, Copy, Users, Shield, MessageCircle, CreditCard as Edit3, Check, ExternalLink } from 'lucide-react';
 import { Whiteboard, ShareLink } from '../../types';
 
 interface CollaborationPanelProps {
